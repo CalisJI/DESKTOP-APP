@@ -1,19 +1,19 @@
 import sys
-from pathlib import Path
+
 import typing
 import os
 import asyncio
 import keyword
-from inputs import get_gamepad
 import pygame
 import pkgutil
+import pyperclip
 import threading
 import json
 import datetime
 import RobotAction
 from fwd import Ui_MainWindow
 from PyQt5 import QtCore
-from PyQt5.QtGui import QKeySequence,QStandardItem,QStandardItemModel,QColor
+from PyQt5.QtGui import QKeySequence,QStandardItem,QStandardItemModel,QColor,QFont
 from PyQt5.QtCore import Qt,pyqtSignal,QObject, QTimer
 from PyQt5.QtWidgets import QApplication,\
     QMenuBar, QMenu, QAction, QFileDialog, \
@@ -21,6 +21,9 @@ from PyQt5.QtWidgets import QApplication,\
             QToolBar,QDialog,QTextEdit,QVBoxLayout,\
                 QPushButton,QTreeView,QSizePolicy
 from PyQt5.Qsci import QsciScintilla, QsciLexerPython,QsciAPIs
+from pathlib import Path
+from enum import Enum
+from inputs import get_gamepad
 global current_directory
 current_directory = os.path.dirname(os.path.realpath(__file__))
 print(current_directory)
@@ -71,6 +74,27 @@ class MainWindow(Ui_MainWindow):
         self.setup_tab_view_code()
         # _ = self.create_gamepad()
 
+        #ininitialize value
+
+        self.connected_robot = False
+
+        self.Radiobtn_TX.setChecked(True)
+        self.Ref_Frame_Box.setCurrentIndex(0)
+
+        self.var_manual_speed = 20
+        self.manual_speed.setValue(self.var_manual_speed)
+
+        self.var_auto_speed = 20
+        self.Auto_Speed.setValue(self.var_auto_speed)
+
+        self.var_manual_acc = 20
+        self.manual_acc.setValue(self.var_manual_acc)
+
+        self.var_auto_acc = 20
+        self.Auto_Acc.setValue(self.var_auto_acc)
+
+        self.radio_auto_mode.setChecked(False)
+        self.radio_non_teaching_mode.setChecked(True)
 
     def _SetUp_Triggers(self):
         # File Menu
@@ -107,11 +131,45 @@ class MainWindow(Ui_MainWindow):
         self.doubleSpinBox_5.valueChanged.connect(self.doubleSpinBoxChange5)
         self.doubleSpinBox_6.valueChanged.connect(self.doubleSpinBoxChange6)
 
-
+        self.manual_speed.valueChanged.connect(self.manual_speed_change)
+        self.Auto_Speed.valueChanged.connect(self.Auto_Speed_change)
+        self.manual_acc.valueChanged.connect(self.manual_acc_change)
+        self.Auto_Acc.valueChanged.connect(self.Auto_Acc_change)
         #Button trigger
 
         self.btn_save_program.clicked.connect(self.saveProgram)
         self.btn_run_program.clicked.connect(self.run_script)
+
+        self.btn_jog_positive.pressed.connect(self.jog_positive_start)
+        self.btn_jog_positive.released.connect(self.jog_positive_stop)
+
+        self.btn_jog_negative.pressed.connect(self.jog_negative_start)
+        self.btn_jog_negative.released.connect(self.jog_negative_stop)
+        #Radio button trigger
+        self.Radiobtn_RX.toggled.connect(self.checkMode_jog)
+        self.Radiobtn_RY.toggled.connect(self.checkMode_jog)
+        self.Radiobtn_RZ.toggled.connect(self.checkMode_jog)
+        self.Radiobtn_TX.toggled.connect(self.checkMode_jog)
+        self.Radiobtn_TY.toggled.connect(self.checkMode_jog)
+        self.Radiobtn_TZ.toggled.connect(self.checkMode_jog)
+        self.radio_J1.toggled.connect(self.checkMode_jog)
+        self.radio_J2.toggled.connect(self.checkMode_jog)
+        self.radio_J3.toggled.connect(self.checkMode_jog)
+        self.radio_J4.toggled.connect(self.checkMode_jog)
+        self.radio_J5.toggled.connect(self.checkMode_jog)
+        self.radio_J6.toggled.connect(self.checkMode_jog)
+
+        self.radio_auto_mode.toggled.connect(self.Mode_Changed)
+        self.radio_manual_mode.toggled.connect(self.Mode_Changed)
+
+        self.radio_non_teaching_mode.toggled.connect(self.Drag_mode_changed)
+        self.radio_teaching_mode.toggled.connect(self.Drag_mode_changed)
+        # Dial
+        # self.Dial_button_jog.valueChanged.connect(self.Dial_Jog)
+
+        #Combobox triggers
+
+        self.Ref_Frame_Box.currentIndexChanged.connect(self.Reference_FrameChanged)
 #region TreeView
     def AddModel_Treeview(self):
         self.model = QStandardItemModel()
@@ -127,6 +185,7 @@ class MainWindow(Ui_MainWindow):
 
         self.program_treeview.setContextMenuPolicy(Qt.CustomContextMenu)
         self.program_treeview.customContextMenuRequested.connect(self.treeview_show_context_menu)
+        
     
     def treeview_show_context_menu(self,position):
         menu = QMenu(self.program_treeview)
@@ -136,9 +195,12 @@ class MainWindow(Ui_MainWindow):
         delete_action.triggered.connect(self.delete_target_item)
         new_program_action = QAction('Add Program', self.program_treeview)
         new_program_action.triggered.connect(self.new_program_item)
+        copy_point_action = QAction('Copy Point', self.program_treeview)
+        copy_point_action.triggered.connect(self.copy_point_item)
         menu.addAction(add_action)
         menu.addAction(delete_action)
         menu.addAction(new_program_action)
+        menu.addAction(copy_point_action)
         menu.exec_(self.program_treeview.viewport().mapToGlobal(position))
 
     def add_new_target_item(self):
@@ -146,12 +208,15 @@ class MainWindow(Ui_MainWindow):
         item1 = root_item.child(0)  # Get 'Item 1' directly
         num = item1.rowCount() + 1
         new_item = QStandardItem(f'Target {num}')
-        array_data = [self.doubleSpinBox.value(),\
+        array_data = [[self.doubleSpinBox.value(),\
                       self.doubleSpinBox_2.value(),\
                         self.doubleSpinBox_3.value(),\
                             self.doubleSpinBox_4.value(),\
                                 self.doubleSpinBox_5.value(),\
-                                    self.doubleSpinBox_6.value()]
+                                    self.doubleSpinBox_6.value()]]
+        if self.connected_robot:
+            des_pos = robot.GetForwardKin(array_data[0])
+            array_data.append(des_pos)
         new_item.setData(array_data,role= Qt.UserRole)
         item1.appendRow(new_item)
 
@@ -187,6 +252,39 @@ class MainWindow(Ui_MainWindow):
         with open(file_path, 'w') as file:
             pass  # Placeholder content
         root_item.appendRow(new_item)
+        self.set_new_tab(Path(file_path),True)
+
+    def item_name_changed(self, item):
+        new_name = item.text()
+        print(f"Item name changed to: {new_name}")
+
+    def copy_point_item(self,index):
+        selected_index = self.program_treeview.selectionModel().currentIndex()
+        selected_item = self.model.itemFromIndex(selected_index)
+        if selected_item is not None:
+            print(selected_item.text())
+            if isinstance(selected_item.data(Qt.UserRole), list):
+                targetpoints = [selected_item.data(Qt.UserRole)]
+
+                txt = selected_item.text().replace(" ", "_")+'_J =['
+
+                for i in targetpoints[0]:
+                    txt += f'{i},'
+                txt = txt[:-1] +']\n'
+
+                
+                
+                if len(targetpoints) > 1:
+                    txt += selected_item.text().replace(" ", "_")+'_P =['
+                    for i in targetpoints[1]:
+                        txt += f'{i},'
+                    txt = txt[:-1] +']\n'
+                
+                external_pos = f'e{selected_item.text().replace(" ", "_")}P=[0.000,0.000,0.000,0.000]\nd{selected_item.text().replace(" ", "_")}P=[1.000,1.000,1.000,1.000,1.000,1.000]'
+                txt += external_pos
+                pyperclip.copy(txt)
+            else:
+                pass
 
     def save_items(self):
         # file_dialog = QFileDialog(self.centralwidget)
@@ -275,7 +373,7 @@ class MainWindow(Ui_MainWindow):
             path = clicked_item.data(Qt.UserRole)
             # path = root.child(index.row()).data(Qt.UserRole)
             p = Path(path)
-            self.set_new_tab(p)
+            self.set_new_tab(p,"")
         
             
 #endregion
@@ -365,6 +463,7 @@ class MainWindow(Ui_MainWindow):
             print("Connecting to robot...")
             global robot
             robot = RobotAction.RobotAction()
+            self.connected_robot = True
             self.timer.start()
         except Exception as e:
             ret = QMessageBox.critical(self.centralwidget, "Error", "Connect to robot failed", QMessageBox.Ok)
@@ -423,7 +522,7 @@ class MainWindow(Ui_MainWindow):
         edittor.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAll)
         edittor.setAutoCompletionThreshold(1)
         edittor.setAutoCompletionCaseSensitivity(False)
-        edittor.setAutoCompletionUseSingle(QsciScintilla.AutoCompletionUseSingle.AcusNever)
+        # edittor.setAutoCompletionUseSingle(QsciScintilla.AutoCompletionUseSingle.AcusNever)
         #caret 
         # TODO: add caret settings
 
@@ -434,10 +533,35 @@ class MainWindow(Ui_MainWindow):
         edittor.setCaretLineVisible(True)
         edittor.setCaretWidth(2)
         edittor.setCaretLineBackgroundColor(QColor("#cdf1fe"))
+        # edittor.setAutoCompletionWordSeparators(" .")
+        edittor.setAutoCompletionReplaceWord(True)
 
         #lexer TODO: add lexer
         self.pylexer = QsciLexerPython() # there isa default for many languuages
-        self.pylexer.setDefaultFont(self.centralwidget.font())
+        font = QFont("Consolas", 14)  # Replace with your desired font and size
+        
+        
+        # Add words to the auto-completion list
+        # edittor.setAutoCompletionWordList(["if", "else", "while", "for", "def", "class", "import"])
+        
+        # Create a QFont object for comments
+        comment_font = QFont("Arial", 14)  # Adjust as needed
+        self.pylexer.setDefaultFont(font)
+        self.pylexer.setFont(font, QsciLexerPython.Comment)
+        self.pylexer.setFont(font, QsciLexerPython.Keyword)
+        self.pylexer.setFont(font, QsciLexerPython.HighlightedIdentifier)
+        self.pylexer.setFont(font, QsciLexerPython.ClassName)
+        self.pylexer.setFont(font, QsciLexerPython.FunctionMethodName)
+        self.pylexer.setFont(font, QsciLexerPython.Identifier)
+        self.pylexer.setFont(font, QsciLexerPython.Number)
+        self.pylexer.setFont(font, QsciLexerPython.Operator)
+        self.pylexer.setFont(font, QsciLexerPython.DoubleQuotedFString)
+        self.pylexer.setFont(font, QsciLexerPython.DoubleQuotedString)
+        self.pylexer.setFont(font, QsciLexerPython.SingleQuotedFString)
+        self.pylexer.setFont(font, QsciLexerPython.DoubleQuotedString)
+
+
+        # self.pylexer.setDefaultFont(self.centralwidget.font())
         edittor.setLexer(self.pylexer)
 
         # Api
@@ -450,12 +574,16 @@ class MainWindow(Ui_MainWindow):
 
         return edittor
 
-    def set_new_tab(self,path: Path, is_new_file = False):
+    def set_new_tab(self,path: Path,filename:str, is_new_file = False):
         editor = self.get_editors()
 
         if is_new_file:
-            self.tab_code_view.addTab(editor,"untitled")
-            self.statusBar.setText("untitled")
+            if filename!="":
+                self.tab_code_view.addTab(editor,filename)
+                self.statusBar.setText(filename)
+            else:
+                self.tab_code_view.addTab(editor,"unitial")
+                self.statusBar.setText("unitial")
             self.tab_code_view.setCurrentIndex(self.tab_code_view.count() - 1)
             self.current_file = None
             return
@@ -495,12 +623,38 @@ class MainWindow(Ui_MainWindow):
         pass
 #endregion
     
+#region trigger functions
+    def manual_speed_change(self):
+        self.var_manual_speed = self.manual_speed.text()
+    def Auto_Speed_change(self):
+        self.var_auto_speed = self.Auto_Speed.text()
+    def manual_acc_change(self):
+        self.var_manual_acc = self.manual_acc.text()
+    def Auto_Acc_change(self):
+        self.var_auto_acc = self.Auto_Acc.text()
 
+    def Mode_Changed(self):
+        print("Mode changed")
+        if self.connected_robot == True:
+            if self.radio_auto_mode.isChecked() == True:
+                robot.Mode(0)
+            elif self.radio_auto_mode.isChecked() == True:
+                robot.Mode(1)
+    
+    def Drag_mode_changed(self):
+        print("Drag Mode changed")
+        if self.connected_robot == True:
+            if self.radio_non_teaching_mode.isChecked() == True:
+                robot.DragTeachSwitch(2)
+            elif self.radio_teaching_mode.isChecked() == True:
+                robot.DragTeachSwitch(1)
+#endregion
 
 #region Functions ------------------------
     def LoadCurrentPossition(self):
-
         try:
+            if self.connected_robot == False: 
+                return
             ret = robot.GetActualJointPosDegree(0)
             ret2 = robot.GetActualTCPPose(0)
             if ret[0] == 0:
@@ -525,7 +679,173 @@ class MainWindow(Ui_MainWindow):
         except Exception as e:
             print("Variable Error: " + str(e))
 
+    def checkMode_jog(self):
+        if self.Radiobtn_RX.isChecked():
+            self.JogMode = JogMode.Rx
+            print("Jog Mode: " + str(self.JogMode))
+        elif self.Radiobtn_RY.isChecked():
+            self.JogMode = JogMode.Ry
+            print("Jog Mode: " + str(self.JogMode))
+        elif self.Radiobtn_RZ.isChecked():
+            self.JogMode = JogMode.Rz
+            print("Jog Mode: " + str(self.JogMode))
+        elif self.Radiobtn_TX.isChecked():
+            self.JogMode = JogMode.Tx
+            print("Jog Mode: " + str(self.JogMode))
+        elif self.Radiobtn_TY.isChecked():
+            self.JogMode = JogMode.Ty
+            print("Jog Mode: " + str(self.JogMode))
+        elif self.Radiobtn_TZ.isChecked():
+            self.JogMode = JogMode.Tz
+            print("Jog Mode: " + str(self.JogMode))
+        elif self.radio_J1.isChecked():
+            self.JogMode = JogMode.J1
+            print("Jog Mode: " + str(self.JogMode))
+        elif self.radio_J2.isChecked():
+            self.JogMode = JogMode.J2
+            print("Jog Mode: " + str(self.JogMode))
+        elif self.radio_J3.isChecked():
+            self.JogMode = JogMode.J3
+            print("Jog Mode: " + str(self.JogMode))
+        elif self.radio_J4.isChecked():
+            self.JogMode = JogMode.J4
+            print("Jog Mode: " + str(self.JogMode))
+        elif self.radio_J5.isChecked():
+            self.JogMode = JogMode.J5
+            print("Jog Mode: " + str(self.JogMode))
+        elif self.radio_J6.isChecked():
+            self.JogMode = JogMode.J6
+            print("Jog Mode: " + str(self.JogMode))
+        else:
+            print("Exceptions")
+            pass
+
+    def Reference_FrameChanged(self):
+
+        if self.Ref_Frame_Box.currentIndex() == 0:
+            self.Ref_Frame = ReferenceFrame.Tool_Frame
+            print(1)
+        elif self.Ref_Frame_Box.currentIndex() == 1:
+            self.Ref_Frame = ReferenceFrame.RobotBaseFrame
+            print(2)
+        elif self.Ref_Frame_Box.currentIndex() == 2:
+            self.Ref_Frame = ReferenceFrame.Workpiece
+            print(3)
+        elif self.Ref_Frame_Box.currentIndex() == 3:
+            self.Ref_Frame = ReferenceFrame.JointJog
+            print(3)
+        else:
+            pass
+
+
+    def Dial_Jog(self):
+        print(self.Dial_button_jog.value())
+    
+    def jog_positive_start(self):
+
+        if self.connected_robot == False:
+            return
+        # Jogging
+        if self.JogMode == JogMode.J1:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=1,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=350)
+        elif self.JogMode == JogMode.J2:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=2,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=340)
+        elif self.JogMode == JogMode.J3:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=3,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=320)
+        elif self.JogMode == JogMode.J4:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=4,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=340)
+        elif self.JogMode == JogMode.J5:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=5,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=350)
+        elif self.JogMode == JogMode.J6:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=6,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=350)
+
+        # base coordinates
+
+        elif self.JogMode == JogMode.Tx:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 1,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=1000)
+        elif self.JogMode == JogMode.Ty:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 2,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=800)
+        elif self.JogMode == JogMode.Tz:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 3,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=660)
+        elif self.JogMode == JogMode.Rx:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 4,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=200)
+        elif self.JogMode == JogMode.Ry:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 5,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=200)
+        elif self.JogMode == JogMode.Rz:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 6,dir=1,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=200)
+
+    def jog_positive_stop(self):
+        if self.connected_robot == False:
+            return
+        if self.JogMode == JogMode.J1:
+            robot.StopJOG(ref = 1)
+        elif self.JogMode == JogMode.J2:
+            robot.StopJOG(ref=1)
+        elif self.JogMode == JogMode.J3:
+            robot.StopJOG(ref=1)
+        elif self.JogMode == JogMode.J4:
+            robot.StopJOG(ref=1)
+        elif self.JogMode == JogMode.J5:
+            robot.StopJOG(ref=1)
+        elif self.JogMode == JogMode.J6:
+            robot.StopJOG(ref=1)
+
+        # Base Coordiante
+
+        else:
+            robot.StopJOG(ref=self.Ref_Frame + 1)
+
+
+    def jog_negative_start(self):
+        if self.connected_robot == False:
+            return
+        if self.JogMode == JogMode.J1:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=1,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=350)
+        elif self.JogMode == JogMode.J2:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=2,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=340)
+        elif self.JogMode == JogMode.J3:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=3,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=320)
+        elif self.JogMode == JogMode.J4:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=4,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=340)
+        elif self.JogMode == JogMode.J5:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=5,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=350)
+        elif self.JogMode == JogMode.J6:
+            robot.StartJOG(ref= ReferenceFrame.JointJog,nb=6,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=350)
+
+         # base coordinates
+
+        elif self.JogMode == JogMode.Tx:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 1,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=1000)
+        elif self.JogMode == JogMode.Ty:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 2,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=800)
+        elif self.JogMode == JogMode.Tz:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 3,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=660)
+        elif self.JogMode == JogMode.Rx:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 4,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=200)
+        elif self.JogMode == JogMode.Ry:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 5,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=200)
+        elif self.JogMode == JogMode.Rz:
+            robot.StartJOG(ref= self.Ref_Frame,nb = 6,dir=0,vel=self.var_manual_speed,acc=self.var_manual_acc,max_dis=200)
+
+
+    def jog_negative_stop(self):
+        if self.connected_robot == False:
+            return
+        if self.JogMode == JogMode.J1:
+            robot.StopJOG(ref = 1)
+        elif self.JogMode == JogMode.J2:
+            robot.StopJOG(ref=1)
+        elif self.JogMode == JogMode.J3:
+            robot.StopJOG(ref=1)
+        elif self.JogMode == JogMode.J4:
+            robot.StopJOG(ref=1)
+        elif self.JogMode == JogMode.J5:
+            robot.StopJOG(ref=1)
+        elif self.JogMode == JogMode.J6:
+            robot.StopJOG(ref=1)
         
+        else:
+            robot.StopJOG(ref=self.Ref_Frame + 1)
 #endregion
 #region Timer
     def update_pose(self):
@@ -589,3 +909,25 @@ class MainWindow(Ui_MainWindow):
 #     window = MainWindow(None)
 #     window.show()
 #     sys.exit(app.exec_())
+
+#region ENUM
+class JogMode(Enum):
+    Tx = 1
+    Ty = 2
+    Tz = 3
+    Rx = 4
+    Ry = 5
+    Rz = 6
+    J1 = 7
+    J2 = 8
+    J3 = 9
+    J4 = 10
+    J5 = 11
+    J6 = 12
+
+class ReferenceFrame(Enum):
+    Tool_Frame = 4
+    JointJog = 0
+    RobotBaseFrame = 2
+    Workpiece = 8
+#endregion

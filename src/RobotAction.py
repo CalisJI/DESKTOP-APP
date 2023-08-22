@@ -20,11 +20,24 @@ class RobotAction:
         else:
             print("the errcode is: ", ret[0])
 
-    def Change_Mode(self, mode):
+    def Mode(self, mode:int):
+
+        """
+            mode : 0 Auto mode, 1 Manual mode
+        """
+
+        return self.robot.Mode(mode)
+
+    def DragTeachSwitch(self, mode):
+
+        """
+            mode: 2 Non drag teaching mode, 1 Drag teaching mode
+        """
+
         # 0: Autom Mode, 1: Manual Mode 2: Teaching Mode 3: Non Teaching Mode
         if mode == 1:
-            self.robot.Mode(1)
-            time.sleep(1)
+            # self.robot.Mode(1)
+            # time.sleep(1)
             self.robot.DragTeachSwitch(1) #When the robot enters the drag teaching mode, it can only enter the drag teaching mode in manual mode
             time.sleep(1)
             ret = self.robot.IsInDragTeach()
@@ -44,9 +57,9 @@ class RobotAction:
     def RobotEnable(self):
         self.robot.RobotEnable(0) # 0: Enable 1: Disable
         time.sleep(3)
-        self.robot.RobotEnable(1) # 0: Enable 1: Disable
+        self.robot.RobotEnable(1) # This function is enabled on the robot. After the robot is powered on, it is automatically enabled by default
     
-    def Obtain_Controller_IP(self):
+    def GetControllerIP(self):
         ret = self.robot.GetControllerIP()
         if ret[0] == 0:
             print("Controller IP Is:", ret[1])
@@ -55,7 +68,7 @@ class RobotAction:
 
 #region Robot Motion
 
-    def Start_JOG(self,ref:int,nb:int,dir:int,vel:int,acc:int,max_dis:float):
+    def StartJOG(self,ref:int,nb:int,dir:int,vel:int,acc:int,max_dis:float):
         """
         Returns [0] Success [errorcode0] Failed
         -------
@@ -72,7 +85,7 @@ class RobotAction:
         max_dis:Maximum angle/distance for a single jog,unit[° or mm]
         """
         return self.robot.StartJOG(ref,nb,dir,vel,acc,max_dis)
-    def Stop_Jog(self,ref:int):
+    def StopJOG(self,ref:int):
         """
         deceleratioin stops
         ref:1-joint jog stop,
@@ -1376,6 +1389,20 @@ class RobotAction:
 
         return self.robot.GetInverseKin(type,desc_pos,config)
     
+    def GetForwardKin(self,joint_pos):
+        """
+            Returns the forwardKin
+            Success:[0, des_pos] des_pos = [x,y,z,rx,ry,rz] posture, unit[mm][°]
+            Failed:[errcode,]
+        """
+        # import frrpc
+        # # A connection is established with the robot controller. A successful connection returns a robot object
+        # robot = frrpc.RPC('192.168.58.2')
+        # J1=[95.442,-101.149,-98.699,-68.347,90.580,-47.174]
+        # ret = robot.GetForwardKin(J1)
+        # print(ret)
+        return self.robot.GetForwardKin(joint_pos)
+
     #Obtain the weight of the current load
     def GetTargetPayload(self,flag):
         """
@@ -1458,4 +1485,5 @@ class RobotAction:
         #     print("the errcode is: ", ret[0])
 
         return self.robot.GetRobotMotionDone()
+    
 #endregion
